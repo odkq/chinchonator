@@ -4,12 +4,23 @@ Copyright (C) 2019 Pablo Martín <pablo@odkq.com>
 This is distributed under the GPL license, see LICENSE file for details
 """
 
+import cmd
 import random
+import sys
 
 
 def colorize(inputstr, colornum):
     ''' Use ANSI scape sequences to colorize string '''
     return "\033[1;{};40m{}\033[0;37;40m".format(colornum, inputstr)
+
+def pinfo(inputstr):
+    print(colorize(' *** ' + inputstr, 36))
+
+def pdebug(inputstr):
+    print(colorize(inputstr, 30))
+
+def perror(inputstr):
+    print(colorize('ERROR: ' + inputstr, 31))
 
 
 class Card:
@@ -21,7 +32,7 @@ class Card:
     """
     suit_color = {
             "Bastos": 32,
-            "Espadas": 36,
+            "Espadas": 34,
             "Copas": 35,
             "Oros": 33 }
 
@@ -31,7 +42,7 @@ class Card:
         if (self.number > 10):
             self.value = 10
         else:
-            self.value = 7
+            self.value = self.number
 
     def __repr__(self):
         return colorize('{}{}'.format(self.number, self.suit[0]),
@@ -78,6 +89,13 @@ class Deck:
 
         return repstr
 
+    def last(self):
+        return self.table[len(self.table) - 1]
+
+
+class IllegalMovement(Exception):
+    pass
+
 
 class Hand:
     '''
@@ -93,14 +111,34 @@ class Hand:
             self.cards.append(self.deck.get_down())
 
     def throw(self, position):
+        if len(self.cards) != 8:
+            raise IllegalMovement("Can't throw before getting")
+
         card = self.cards[position]
+        pinfo('*** {} Putting card in position {}: {}'.format(self.name,
+              position, card))
+        del self.cards[position]
         self.deck.put(card)
 
-    def get_down(self):
-        self.cards.append(self.deck.get_down())
+    def get_deck(self):
+        if len(self.cards) != 7:
+            raise IllegalMovement("Can't get more than one card")
+        card = self.deck.get_down()
+        pinfo('*** {} Getting card from deck: {}'.format(self.name, card))
+        self.cards.append(card)
 
-    def get_up(self):
-        self.cards.append(self.deck.get_table())
+    def get_table(self):
+        if len(self.cards) != 7:
+            raise IllegalMovement("Can't get more than one card")
+        card = self.deck.get_table()
+        pinfo('*** {} Getting card from table: {}'.format(self.name, card))
+        self.cards.append(card)
+
+    def value(self):
+        val = 0
+        for card in self.cards:
+            val += card.value
+        return val
 
     def __repr__(self):
         repstr = '{}: '.format(self.name)
@@ -108,13 +146,66 @@ class Hand:
             repstr += repr(card) + ' '
         return(repstr)
 
+class Game(cmd.Cmd):
+    prompt = '> '
 
-if __name__ == "__main__":
-    deck = Deck()
-    print(deck)
-    human = Hand(deck, 'human')
-    print(human)
-    machine = Hand(deck, 'machine')
-    print(machine)
-    deck.first_up()
-    print(deck)
+    def __init__(self):
+        cmd.Cmd.__init__(self)
+        self.deck = Deck()
+        pinfo('Shuffling ...')
+        pinfo('Giving cards ...')
+        self.human = Hand(self.deck, 'human')
+        self.machine = Hand(self.deck, 'machine')
+        self.deck.first_up()
+        self._update_prompt()
+
+    def _update_prompt(self):
+        print(str(self.human) + ' top card: ' + str(self.deck.last()))
+
+    def postcmd(self, stop, line):
+        self._update_prompt()
+        return False
+
+    def do_quit(self, args):
+        print('Exiting ...')
+        sys.exit(0)
+
+    def do_debug(self, args):
+        pdebug('Debugging info: --- ')
+        print(self.human)
+        print('Value ' + str(self.human.value()))
+        print(self.machine)
+        print('Value ' + str(self.machine.value()))
+        print(self.deck)
+        pdebug(' ------------------- ')
+
+    def do_throw(self, args):
+        try:
+            position = int(args) - 1
+            if position < 0 or position > 7:
+                raise ValueError
+            self.human.throw(position)
+        except ValueError:
+            perror("Specify a position to throw from 1 to 8")
+        except IllegalMovement as e:
+            perror(str(e))
+
+    def do_deck(self, args):
+        try:
+            self.human.get_deck()
+        except IllegalMovement as e:
+            perror(str(e))
+
+    def do_table(self, args):
+        try:
+            self.human.get_table()
+        except IllegalMovement as e:
+            perror(str(e))
+
+    def default(self, args):
+        perror('Unknown syntax: {}'.format(args))
+
+
+if __name__ == '__main__':
+    game = Game()
+    game.cmdloop()
