@@ -7,6 +7,11 @@ This is distributed under the GPL license, see LICENSE file for details
 import random
 
 
+def colorize(inputstr, colornum):
+    ''' Use ANSI scape sequences to colorize string '''
+    return "\033[1;{};40m{}\033[0;37;40m".format(colornum, inputstr)
+
+
 class Card:
     """
     The spanish deck has 40 cards,
@@ -14,6 +19,12 @@ class Card:
      and 10 cards each (from 1 to 7 and 3 'figuras':
       10 (Sota), 11 (Caballo), 12 (Rey)
     """
+    suit_color = {
+            "Bastos": 32,
+            "Espadas": 36,
+            "Copas": 35,
+            "Oros": 33 }
+
     def __init__(self, suit, number):
         self.suit = suit
         self.number = number
@@ -23,7 +34,8 @@ class Card:
             self.value = 7
 
     def __repr__(self):
-        return '{}{}'.format(self.number, self.suit[0])
+        return colorize('{}{}'.format(self.number, self.suit[0]),
+                        Card.suit_color[self.suit])
 
 
 class Deck:
