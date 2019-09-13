@@ -78,6 +78,8 @@ class ParsedCard(Card):
             raise ParseError('Unable to parse card "{}"'.format(cardstr))
         try:
             number = int(splitted[1])
+            if number > 9:
+                number = number - 2
         except ValueError:
             raise ParseError('Unable to parse card "{}"'.format(cardstr))
         suit = None
@@ -109,7 +111,17 @@ class Deck:
         random.shuffle(self.cards)
 
     def get_down(self):
-        return self.cards.pop()
+        try:
+            return self.cards.pop()
+        except IndexError:
+            # Reshuffle cards from table
+            for index in range(len(self.table) - 1):
+                self.cards.append(self.table[index])
+            for index in range(len(self.table) - 1):
+                del self.table[0]
+            pinfo('Reshuffling cards from table ...')
+            random.shuffle(self.cards)
+            return self.cards.pop()
 
     def get_table(self):
         return self.table.pop()
@@ -162,8 +174,8 @@ class Hand:
             toeval = copy.copy(self.cards)
             del toeval[position]
             pos, val = self.evaluate(toeval)
-            # if val > 4:
-            #    raise IllegalMovement("Can't flip with more than 4")
+            if val > 4:
+                raise IllegalMovement("Can't flip with more than 4")
 
         card = self.cards[position]
         pinfo('{} throwing card in position {}: {}'.format(self.name,
@@ -175,7 +187,10 @@ class Hand:
         if len(self.cards) != 7:
             raise IllegalMovement("Can't get more than one card")
         card = self.deck.get_down()
-        pinfo('{} getting card from deck: {}'.format(self.name, card))
+        if self.name == 'machine':
+            pinfo('{} getting card from deck: (not printed)'.format(self.name))
+        else:
+            pinfo('{} getting card from deck: {}'.format(self.name, card))
         self.cards.append(card)
 
     def get_table(self):
@@ -204,24 +219,45 @@ class Hand:
     def straight_evaluate(self, base):
         l = len(base)
         values = [0] * l
-        for n in range(l):
-            if n >= 2:
-                if ((base[n].number == (base[n - 1].number + 1)) and
-                        (base[n - 1].number == base[n - 2].number + 1) and
-                        (base[n].suit == base[n - 1].suit) and
-                        (base[n - 1].suit == base[n].suit)):
-                    values[n] = 0
-                    values[n - 1] = 0
-                    values[n - 2] = 0
-                elif ((base[n].number == base[n - 1].number) and
-                        (base[n - 1].number == base[n - 2].number)):
-                    values[n] = 0
-                    values[n - 1] = 0
-                    values[n - 2] = 0
-                else:
-                    values[n] = base[n].value
+        for i in range(l):
+            if base[i].value is None:
+                print('Null in {}'.format(base))
+            else:
+                values[i] = base[i].value
+        # for n in range(l):
+        n = 0
+        while True:
+            if n >= l:
+                break
+            elif n >= 2:
+                try:
+                    if ((base[n].number == (base[n - 1].number + 1)) and
+                            (base[n - 1].number == (base[n - 2].number + 1)) and
+                            (base[n].suit == base[n - 1].suit) and
+                            (base[n - 1].suit == base[n - 2].suit)):
+                        if (values[n - 1] != 0) and (values[n -2] != 0):
+                            # Avoid:
+                            # > evaluate 3B 10B 4B 10C 10O 11O 12O
+                            # Best (10B, 10C, 10O, 11O, 12O, 3B, 4B) Value 7
+                            # n += 2
+                            values[n] = 0
+                            values[n - 1] = 0
+                            values[n - 2] = 0
+                    elif ((base[n].number == base[n - 1].number) and
+                            (base[n - 1].number == base[n - 2].number)):
+                        if (values[n - 1] != 0) and (values[n -2] != 0):
+                            values[n] = 0
+                            values[n - 1] = 0
+                            values[n - 2] = 0
+                        # n += 2
+                    else:
+                        values[n] = base[n].value
+                except IndexError as e:
+                    print("Index n {} l {}".format(n, l))
+                    raise e
             else:
                 values[n] = base[n].value
+            n += 1
         total = 0
         for value in values:
             total += value
@@ -287,8 +323,15 @@ class Hand:
                 break
         if nthrow == -1:
             raise Exception("WOT")
-        self.throw(nthrow)
 
+        toeval = copy.copy(self.cards)
+        del toeval[nthrow]
+        pos, val = self.evaluate(toeval)
+        if val < 5 and pos[6].number < 5:
+            return nthrow
+        else:
+            self.throw(nthrow)
+            return -1
 
 
 class Game(cmd.Cmd):
@@ -340,7 +383,11 @@ class Game(cmd.Cmd):
             if position < 0 or position > 7:
                 raise ValueError
             self.human.throw(position)
-            self.machine.move()
+            flip_pos = self.machine.move()
+            if flip_pos != -1:
+                self.flip(flip_pos)
+
+
         except ValueError:
             perror("Specify a position to throw from 1 to 8")
         except IllegalMovement as e:
@@ -352,11 +399,18 @@ class Game(cmd.Cmd):
             position = int(args) - 1
             if position < 0 or position > 7:
                 raise ValueError
-            self.human.throw(position, flip=True)
+            self.flip(position, human=True)
         except ValueError:
             perror("Specify a position to flip from 1 to 8")
         except IllegalMovement as e:
             perror(str(e))
+
+    def flip(self, position, human=False):
+        if human:
+            self.human.throw(position, flip=True)
+        else:
+            self.machine.throw(position, flip=True)
+
         hpos, hval = self.human.value()
         mpos, mval = self.machine.value()
 
@@ -400,8 +454,22 @@ class Game(cmd.Cmd):
 
     def do_move(self, args):
         'Perform automatic movement'
-        self.human.move()
-        self.machine.move()
+        do_loop = False
+        if 'loop' in args.split(' '):
+            do_loop = True
+        while(True):
+            flip_pos = self.human.move()
+            if flip_pos != -1:
+                self.flip(flip_pos, human=True)
+                do_loop = False
+            flip_pos = self.machine.move()
+            if flip_pos != -1:
+                self.flip(flip_pos, human=False)
+                do_loop = False
+            if 'debug' in args.split(' ') and do_loop:
+                self.do_debug('')
+            if not do_loop:
+                break
 
     def do_evaluate(self, args):
         '''Evaluate current position or a new one.
@@ -409,10 +477,14 @@ class Game(cmd.Cmd):
         if args == '':
             # Evaluate current hand
             pos, val = self.human.evaluate()
-            print("Best {} Value {}".format(pos, val))
+            print("Best {} Value {}".format(pos, val), end=' ')
             return
         base = []
+        straight = False
         for cardstr in args.split(' '):
+            if cardstr == 'straight':
+                straight = True
+                continue
             try:
                 card = ParsedCard(cardstr)
             except ParseError as e:
@@ -420,8 +492,11 @@ class Game(cmd.Cmd):
                 return
             base.append(card)
         # Evaluate given hand
-        pos, val = self.human.evaluate(base)
-        print("Best {} Value {}".format(pos, val))
+        if straight:
+            pos, val = self.human.straight_evaluate(base)
+        else:
+            pos, val = self.human.evaluate(base)
+        print("Best {} Value {}".format(pos, val), end=' ')
 
     def default(self, args):
         perror('Unknown syntax: {}'.format(args))
